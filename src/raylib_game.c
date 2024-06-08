@@ -1,293 +1,228 @@
-/*******************************************************************************************
-*
-*   raylib game template
-*
-*   <Game title>
-*   <Game description>
-*
-*   This game has been created using raylib (www.raylib.com)
-*   raylib is licensed under an unmodified zlib/libpng license (View raylib.h for details)
-*
-*   Copyright (c) 2021 Ramon Santamaria (@raysan5)
-*
-********************************************************************************************/
-
 #include "raylib.h"
-#include "screens.h"    // NOTE: Declares global (extern) variables and screens functions
+#include <stdlib.h>
 
-#if defined(PLATFORM_WEB)
-    #include <emscripten/emscripten.h>
-#endif
+#define PLAYER_LIFES 5
+#define BRICK_LINES 5
+#define BRICKS_PER_LINE 20
 
-//----------------------------------------------------------------------------------
-// Shared Variables Definition (global)
-// NOTE: Those variables are shared between modules through screens.h
-//----------------------------------------------------------------------------------
-GameScreen currentScreen = LOGO;
-Font font = { 0 };
-Music music = { 0 };
-Sound fxCoin = { 0 };
+#define BRICKS_POSITION_Y 50
 
-//----------------------------------------------------------------------------------
-// Local Variables Definition (local to this module)
-//----------------------------------------------------------------------------------
-static const int screenWidth = 800;
-static const int screenHeight = 450;
+typedef enum GameScreen { LOGO,
+                          TITLE,
+                          GAMEPLAY,
+                          ENDING } GameScreen;
 
-// Required variables to manage screen transitions (fade-in, fade-out)
-static float transAlpha = 0.0f;
-static bool onTransition = false;
-static bool transFadeOut = false;
-static int transFromScreen = -1;
-static GameScreen transToScreen = UNKNOWN;
+typedef struct Player Player;
+typedef struct Ball Ball;
+typedef struct Brick Brick;
 
-//----------------------------------------------------------------------------------
-// Local Functions Declaration
-//----------------------------------------------------------------------------------
-static void ChangeToScreen(int screen);     // Change to screen, no transition effect
+struct Player {
+    Vector2 position;
+    Vector2 speed;
+    Vector2 size;
+    Rectangle bounds;
+    int lifes;
+};
 
-static void TransitionToScreen(int screen); // Request transition to next screen
-static void UpdateTransition(void);         // Update transition effect
-static void DrawTransition(void);           // Draw transition effect (full-screen rectangle)
+struct Ball {
+    Vector2 position;
+    Vector2 speed;
+    float radius;
+    bool active;
+};
 
-static void UpdateDrawFrame(void);          // Update and draw one frame
+struct Brick {
+    Vector2 position;
+    Vector2 size;
+    Rectangle bounds;
+    int resistance;
+    bool active;
+};
 
-//----------------------------------------------------------------------------------
-// Main entry point
-//----------------------------------------------------------------------------------
-int main(void)
-{
-    // Initialization
-    //---------------------------------------------------------
-    InitWindow(screenWidth, screenHeight, "raylib game template");
+int main(void) {
+    const int screenWidth = 800;
+    const int screenHeight = 450;
 
-    InitAudioDevice();      // Initialize audio device
+    InitWindow(screenWidth, screenHeight, "PROJECT: BLOCKS GAME");
 
-    // Load global data (assets that must be available in all screens, i.e. font)
-    font = LoadFont("resources/mecha.png");
-    music = LoadMusicStream("resources/ambient.ogg");
-    fxCoin = LoadSound("resources/coin.wav");
+    GameScreen screen = LOGO;
 
-    SetMusicVolume(music, 1.0f);
-    PlayMusicStream(music);
+    unsigned framesCounter = 0;
+    int8_t gameResult = -1;  // 0 - Loose, 1 - Win, -1 - Not defined
+    bool gamePaused = false;
 
-    // Setup and init first screen
-    currentScreen = LOGO;
-    InitLogoScreen();
+    Player player = {0};
+    Ball ball = {0};
+    Brick bricks[BRICK_LINES][BRICKS_PER_LINE] = {0};
 
-#if defined(PLATFORM_WEB)
-    emscripten_set_main_loop(UpdateDrawFrame, 60, 1);
-#else
-    SetTargetFPS(60);       // Set our game to run at 60 frames-per-second
-    //--------------------------------------------------------------------------------------
+    player.position = (Vector2){(float)screenWidth / 2, (float)screenHeight * 7 / 8};
+    player.speed = (Vector2){8.0f, 0.0f};
+    player.size = (Vector2){100, 24};
+    player.lifes = PLAYER_LIFES;
 
-    // Main game loop
-    while (!WindowShouldClose())    // Detect window close button or ESC key
-    {
-        UpdateDrawFrame();
-    }
-#endif
+    ball.radius = 10.0f;
+    ball.active = false;
+    ball.position = (Vector2){player.position.x + player.size.x / 2,
+                              player.position.y - ball.radius * 2};
+    ball.speed = (Vector2){4.0f, 4.0f};
 
-    // De-Initialization
-    //--------------------------------------------------------------------------------------
-    // Unload current screen data before closing
-    switch (currentScreen)
-    {
-        case LOGO: UnloadLogoScreen(); break;
-        case TITLE: UnloadTitleScreen(); break;
-        case GAMEPLAY: UnloadGameplayScreen(); break;
-        case ENDING: UnloadEndingScreen(); break;
-        default: break;
+    for (int j = 0; j < BRICK_LINES; j++) {
+        for (int i = 0; i < BRICKS_PER_LINE; i++) {
+            bricks[j][i].size = (Vector2){(float)screenWidth / BRICKS_PER_LINE, 20};
+            bricks[j][i].position = (Vector2){
+                i * bricks[j][i].size.x,
+                j * bricks[j][i].size.y + BRICKS_POSITION_Y};
+            bricks[j][i].bounds = (Rectangle){bricks[j][i].position.x, bricks[j][i].position.y, bricks[j][i].size.x, bricks[j][i].size.y};
+            bricks[j][i].active = true;
+        }
     }
 
-    // Unload global data loaded
-    UnloadFont(font);
-    UnloadMusicStream(music);
-    UnloadSound(fxCoin);
+    SetTargetFPS(60);
 
-    CloseAudioDevice();     // Close audio context
+    while (!WindowShouldClose()) {
+        switch (screen) {
+        case LOGO: {
+            framesCounter++;
 
-    CloseWindow();          // Close window and OpenGL context
-    //--------------------------------------------------------------------------------------
-
-    return 0;
-}
-
-//----------------------------------------------------------------------------------
-// Module specific Functions Definition
-//----------------------------------------------------------------------------------
-// Change to next screen, no transition
-static void ChangeToScreen(GameScreen screen)
-{
-    // Unload current screen
-    switch (currentScreen)
-    {
-        case LOGO: UnloadLogoScreen(); break;
-        case TITLE: UnloadTitleScreen(); break;
-        case GAMEPLAY: UnloadGameplayScreen(); break;
-        case ENDING: UnloadEndingScreen(); break;
-        default: break;
-    }
-
-    // Init next screen
-    switch (screen)
-    {
-        case LOGO: InitLogoScreen(); break;
-        case TITLE: InitTitleScreen(); break;
-        case GAMEPLAY: InitGameplayScreen(); break;
-        case ENDING: InitEndingScreen(); break;
-        default: break;
-    }
-
-    currentScreen = screen;
-}
-
-// Request transition to next screen
-static void TransitionToScreen(GameScreen screen)
-{
-    onTransition = true;
-    transFadeOut = false;
-    transFromScreen = currentScreen;
-    transToScreen = screen;
-    transAlpha = 0.0f;
-}
-
-// Update transition effect (fade-in, fade-out)
-static void UpdateTransition(void)
-{
-    if (!transFadeOut)
-    {
-        transAlpha += 0.05f;
-
-        // NOTE: Due to float internal representation, condition jumps on 1.0f instead of 1.05f
-        // For that reason we compare against 1.01f, to avoid last frame loading stop
-        if (transAlpha > 1.01f)
-        {
-            transAlpha = 1.0f;
-
-            // Unload current screen
-            switch (transFromScreen)
-            {
-                case LOGO: UnloadLogoScreen(); break;
-                case TITLE: UnloadTitleScreen(); break;
-                case OPTIONS: UnloadOptionsScreen(); break;
-                case GAMEPLAY: UnloadGameplayScreen(); break;
-                case ENDING: UnloadEndingScreen(); break;
-                default: break;
+            if (framesCounter > 180) {
+                screen = TITLE;  // change to TITLE screen after 3 seconds
+                framesCounter = 0;
             }
+        } break;
+        case TITLE: {
+            framesCounter++;
 
-            // Load next screen
-            switch (transToScreen)
-            {
-                case LOGO: InitLogoScreen(); break;
-                case TITLE: InitTitleScreen(); break;
-                case GAMEPLAY: InitGameplayScreen(); break;
-                case ENDING: InitEndingScreen(); break;
-                default: break;
+            if (IsKeyPressed(KEY_ENTER))
+                screen = GAMEPLAY;
+        } break;
+        case GAMEPLAY: {
+            if (IsKeyPressed('P'))
+                gamePaused = !gamePaused;
+
+            if (!gamePaused) {
+                if (IsKeyDown(KEY_LEFT))
+                    player.position.x -= player.speed.x;
+                if (IsKeyDown(KEY_RIGHT))
+                    player.position.x += player.speed.x;
+
+                if ((player.position.x) <= 0)
+                    player.position.x = 0;
+                if ((player.position.x + player.size.x) >= screenWidth)
+                    player.position.x = screenWidth - player.size.x;
+
+                player.bounds = (Rectangle){player.position.x, player.position.y, player.size.x, player.size.y};
+
+                if (ball.active) {
+                    ball.position.x += ball.speed.x;
+                    ball.position.y += ball.speed.y;
+
+                    if (((ball.position.x + ball.radius) >= screenWidth) || ((ball.position.x - ball.radius) <= 0))
+                        ball.speed.x *= -1;
+                    if ((ball.position.y - ball.radius) <= 0)
+                        ball.speed.y *= -1;
+
+                    if (CheckCollisionCircleRec(ball.position, ball.radius, player.bounds)) {
+                        ball.speed.y *= -1;
+                        ball.speed.x = (ball.position.x - (player.position.x + player.size.x / 2)) / player.size.x * 5.0f;
+                    }
+
+                    for (int j = 0; j < BRICK_LINES; j++) {
+                        for (int i = 0; i < BRICKS_PER_LINE; i++) {
+                            if (bricks[j][i].active && (CheckCollisionCircleRec(ball.position, ball.radius, bricks[j][i].bounds))) {
+                                bricks[j][i].active = false;
+                                ball.speed.y *= -1;
+
+                                break;
+                            }
+                        }
+                    }
+
+                    if ((ball.position.y + ball.radius) >= screenHeight) {
+                        ball.position.x = player.position.x + player.size.x / 2;
+                        ball.position.y = player.position.y - ball.radius - 1.0f;
+                        ball.speed = (Vector2){0, 0};
+                        ball.active = false;
+
+                        player.lifes--;
+                    }
+
+                    if (player.lifes < 0) {
+                        screen = ENDING;
+                        player.lifes = 5;
+                        framesCounter = 0;
+                    }
+                } else {
+                    ball.position.x = player.position.x + player.size.x / 2;
+
+                    if (IsKeyPressed(KEY_SPACE)) {
+                        ball.active = true;
+                        ball.speed = (Vector2){0, -5.0f};
+                    }
+                }
             }
+        } break;
+        case ENDING: {
+            framesCounter++;
 
-            currentScreen = transToScreen;
-
-            // Activate fade out effect to next loaded screen
-            transFadeOut = true;
+            if (IsKeyPressed(KEY_ENTER))
+                screen = TITLE;
+        } break;
+        default:
+            break;
         }
-    }
-    else  // Transition fade out logic
-    {
-        transAlpha -= 0.02f;
 
-        if (transAlpha < -0.01f)
-        {
-            transAlpha = 0.0f;
-            transFadeOut = false;
-            onTransition = false;
-            transFromScreen = -1;
-            transToScreen = UNKNOWN;
-        }
-    }
-}
-
-// Draw transition effect (full-screen rectangle)
-static void DrawTransition(void)
-{
-    DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Fade(BLACK, transAlpha));
-}
-
-// Update and draw game frame
-static void UpdateDrawFrame(void)
-{
-    // Update
-    //----------------------------------------------------------------------------------
-    UpdateMusicStream(music);       // NOTE: Music keeps playing between screens
-
-    if (!onTransition)
-    {
-        switch(currentScreen)
-        {
-            case LOGO:
-            {
-                UpdateLogoScreen();
-
-                if (FinishLogoScreen()) TransitionToScreen(TITLE);
-
-            } break;
-            case TITLE:
-            {
-                UpdateTitleScreen();
-
-                if (FinishTitleScreen() == 1) TransitionToScreen(OPTIONS);
-                else if (FinishTitleScreen() == 2) TransitionToScreen(GAMEPLAY);
-
-            } break;
-            case OPTIONS:
-            {
-                UpdateOptionsScreen();
-
-                if (FinishOptionsScreen()) TransitionToScreen(TITLE);
-
-            } break;
-            case GAMEPLAY:
-            {
-                UpdateGameplayScreen();
-
-                if (FinishGameplayScreen() == 1) TransitionToScreen(ENDING);
-                //else if (FinishGameplayScreen() == 2) TransitionToScreen(TITLE);
-
-            } break;
-            case ENDING:
-            {
-                UpdateEndingScreen();
-
-                if (FinishEndingScreen() == 1) TransitionToScreen(TITLE);
-
-            } break;
-            default: break;
-        }
-    }
-    else UpdateTransition();    // Update transition (fade-in, fade-out)
-    //----------------------------------------------------------------------------------
-
-    // Draw
-    //----------------------------------------------------------------------------------
-    BeginDrawing();
+        // DRAW
+        BeginDrawing();
 
         ClearBackground(RAYWHITE);
 
-        switch(currentScreen)
-        {
-            case LOGO: DrawLogoScreen(); break;
-            case TITLE: DrawTitleScreen(); break;
-            case OPTIONS: DrawOptionsScreen(); break;
-            case GAMEPLAY: DrawGameplayScreen(); break;
-            case ENDING: DrawEndingScreen(); break;
-            default: break;
+        switch (screen) {
+        case LOGO: {
+            DrawText("LOGO SCREEN", 20, 20, 40, LIGHTGRAY);
+        } break;
+        case TITLE: {
+            DrawText("TITLE SCREEN", 20, 20, 40, DARKGREEN);
+            if ((framesCounter / 30) % 2 == 0)
+                DrawText("PRESS [ENTER] to START", GetScreenWidth() / 2 - MeasureText("PRESS [ENTER] to START", 20) / 2, GetScreenHeight() / 2 + 60, 20, DARKGRAY);
+        } break;
+        case GAMEPLAY: {
+            DrawRectangle(player.position.x, player.position.y, player.size.x, player.size.y, BLACK);
+            DrawCircle(ball.position.x, ball.position.y, ball.radius, MAROON);
+
+            for (int j = 0; j < BRICK_LINES; j++) {
+                for (int i = 0; i < BRICKS_PER_LINE; i++) {
+                    if (bricks[j][i].active) {
+                        if ((i + j) % 2 == 0)
+                            DrawRectangle(bricks[j][i].position.x, bricks[j][i].position.y, bricks[j][i].size.x, bricks[j][i].size.y, GRAY);
+                        else
+                            DrawRectangle(bricks[j][i].position.x, bricks[j][i].position.y, bricks[j][i].size.x, bricks[j][i].size.y, DARKGRAY);
+                    }
+                }
+            }
+
+            for (int i = 0; i < player.lifes; i++)
+                DrawRectangle(20 + 40 * i, screenHeight - 30, 35, 10, LIGHTGRAY);
+
+            if (gamePaused)
+                DrawText("GAME PAUSED", screenWidth / 2 - MeasureText("GAME PAUSED", 40) / 2, screenHeight / 2 + 60, 40, GRAY);
+        } break;
+        case ENDING: {
+            DrawText("ENDING SCREEN", 20, 20, 40, DARKBLUE);
+
+            if ((framesCounter / 30) % 2 == 0)
+                DrawText("PRESS [ENTER] to PLAY AGAIN", GetScreenWidth() / 2 - MeasureText("PRESS [ENTER] to PLAY AGAIN", 20) / 2, GetScreenHeight() / 2 + 80, 20, GRAY);
+        } break;
+        default:
+            break;
         }
 
-        // Draw full screen rectangle in front of everything
-        if (onTransition) DrawTransition();
+        EndDrawing();
+    }
 
-        //DrawFPS(10, 10);
+    // De-init
 
-    EndDrawing();
-    //----------------------------------------------------------------------------------
+    // Unload any loaded resources
+    CloseWindow();
+
+    return EXIT_SUCCESS;
 }
